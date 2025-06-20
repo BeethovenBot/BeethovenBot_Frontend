@@ -6,9 +6,9 @@ import './index.css';
 function App() {
   const [recomendacion, setRecomendacion] = useState('');
   const [streamIniciado, setStreamIniciado] = useState(false);
-  const [imagenesBoton, setImagenesBoton] = useState([]);
   const videoTrackRef = useRef(null);
   const intervalRef = useRef(null);
+  const lastSnapshotRef = useRef('');
 
   async function iniciarCaptura() {
     try {
@@ -107,15 +107,10 @@ function App() {
       for (let i = 0; i < dealerROIs.length; i++) {
         const imgDealer = extraerRoi(dealerROIs[i]);
         const resDealer = await procesarImagenBase64(imgDealer, 18, 18);
-        botonesDetectados.push({
-          img: imgDealer,
-          vector: resDealer.vectorBinario
-        });
+        botonesDetectados.push(resDealer.vectorBinario);
       }
 
-      setImagenesBoton(botonesDetectados);
-
-      const boton_posicion = botonesDetectados.findIndex(b => b.vector.some(v => v === 1)) + 1 || null;
+      const boton_posicion = botonesDetectados.findIndex(vec => vec.some(v => v === 1)) + 1 || null;
 
       const cartas_jugador = cartas.slice(0, 2).filter(c => c !== 'N/A');
       const cartas_mesa = cartas.slice(2).filter(c => c !== 'N/A');
@@ -128,7 +123,20 @@ function App() {
         asiento_jugador: 5
       };
 
-      setRecomendacion(JSON.stringify(resultado, null, 2));
+      const snapshotActual = JSON.stringify(resultado);
+      if (snapshotActual === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = snapshotActual;
+
+      const prompt = generarPromptParaGPT(resultado);
+
+      const response = await fetch('https://beethovenbotbackend-production.up.railway.app/consulta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...resultado, prompt_gpt: prompt })
+      });
+
+      const data = await response.json();
+      setRecomendacion(data.accion_sugerida || 'No hay respuesta de GPT.');
 
     } catch (err) {
       console.error('Error al capturar o procesar:', err);
@@ -136,38 +144,42 @@ function App() {
     }
   }
 
+  function generarPromptParaGPT(resultado) {
+    const { cartas_jugador, cartas_mesa, boton_posicion, asiento_jugador } = resultado;
+    let mensaje = `Estoy jugando al póker en una mesa de 6 jugadores.\n`;
+    mensaje += `Estoy en el asiento ${asiento_jugador} y el botón está en la posición ${boton_posicion}.\n`;
+    mensaje += `Mis cartas son: ${cartas_jugador.join(' y ')}.\n`;
+
+    if (cartas_mesa.length === 3) {
+      mensaje += `El flop es: ${cartas_mesa.join(', ')}.\n`;
+    } else if (cartas_mesa.length === 4) {
+      mensaje += `El turn es: ${cartas_mesa[3]} (con flop: ${cartas_mesa.slice(0, 3).join(', ')}).\n`;
+    } else if (cartas_mesa.length === 5) {
+      mensaje += `El river es: ${cartas_mesa[4]} (con flop y turn: ${cartas_mesa.slice(0, 4).join(', ')}).\n`;
+    }
+
+    mensaje += `¿Qué me recomiendas hacer en esta situación?`;
+    return mensaje;
+  }
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-start p-4">
-      <h1 className="text-3xl font-bold mb-6">Asistente de Póker con IA</h1>
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-start p-6">
+      <h1 className="text-3xl font-bold mb-4">Asistente de Póker</h1>
 
       {!streamIniciado ? (
         <button onClick={iniciarCaptura} className="bg-yellow-600 hover:bg-yellow-700 px-6 py-3 rounded-lg text-lg font-semibold mb-4">
-          Iniciar Captura de Pantalla
+          Iniciar Captura
         </button>
       ) : (
         <button onClick={detenerCaptura} className="bg-red-600 hover:bg-red-700 px-6 py-3 rounded-lg text-lg font-semibold mb-4">
-          Detener Tracking
+          Detener
         </button>
       )}
 
-      <div className="bg-gray-800 p-4 rounded mt-4 max-w-2xl w-full">
-        <h2 className="text-xl font-semibold mb-2">📝 Estado de la mesa</h2>
-        <pre className="whitespace-pre-wrap break-words text-sm">{recomendacion}</pre>
+      <div className="bg-gray-800 p-6 rounded-lg max-w-xl w-full mt-4">
+        <h2 className="text-xl font-semibold mb-2">🧠 Recomendación</h2>
+        <p className="text-sm whitespace-pre-line">{recomendacion}</p>
       </div>
-
-      {imagenesBoton.length > 0 && (
-        <div className="bg-gray-800 p-4 rounded mt-4 max-w-5xl w-full">
-          <h2 className="text-xl font-semibold mb-2">🎯 Posiciones del Botón (Dealer)</h2>
-          <div className="grid grid-cols-3 gap-4">
-            {imagenesBoton.map((boton, idx) => (
-              <div key={idx} className="bg-gray-700 p-2 rounded text-sm">
-                <img src={boton.img} alt={`Botón ${idx + 1}`} className="w-16 h-16 mb-2 border-2 border-yellow-400" />
-                <p className="break-words">{boton.vector.join('')}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
