@@ -129,7 +129,7 @@ function App() {
 
       const prompt = generarPromptParaGPT(resultado);
 
-      const response = await fetch('https://beethovenbotbackend-production.up.railway.app/consulta', {
+      const response = await fetch('beethoven-bot-backend.vercel.app/api/consulta', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...resultado, prompt_gpt: prompt })
