@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { procesarImagenBase64 } from './utils/procesarImagen';
+import { procesarImagenCanvas } from './utils/procesarImagen';
 import { clasificarVector as clasificarNumero } from './utils/clasificadorNum';
 import './index.css';
 
@@ -16,7 +16,7 @@ function App() {
       const track = stream.getVideoTracks()[0];
       videoTrackRef.current = track;
       setStreamIniciado(true);
-      intervalRef.current = setInterval(capturarPantallaYEnviar, 1000);
+      intervalRef.current = setInterval(capturarPantallaYEnviar, 500);
     } catch (err) {
       console.error('Error al iniciar captura:', err);
       setRecomendacion('❌ No se pudo iniciar la captura.');
@@ -74,23 +74,23 @@ function App() {
         { x: 318, y: 477, w: 35, h: 28 }
       ];
 
-      const extraerRoi = ({ x, y, w, h }) => {
+      const extraerRoiCanvas = ({ x, y, w, h }) => {
         const roiCanvas = document.createElement('canvas');
         roiCanvas.width = w;
         roiCanvas.height = h;
         const roiCtx = roiCanvas.getContext('2d');
         roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-        return roiCanvas.toDataURL('image/jpeg', 1.0);
+        return roiCanvas;
       };
 
       const cartas = [];
 
       for (let i = 0; i < coordenadas.length; i += 2) {
-        const imgNum = extraerRoi(coordenadas[i]);
-        const imgPalo = extraerRoi(coordenadas[i + 1]);
+        const canvasNum = extraerRoiCanvas(coordenadas[i]);
+        const canvasPalo = extraerRoiCanvas(coordenadas[i + 1]);
 
-        const resNum = await procesarImagenBase64(imgNum, 20, 25);
-        const resPalo = await procesarImagenBase64(imgPalo, 18, 18);
+        const resNum = await procesarImagenCanvas(canvasNum, 20, 25);
+        const resPalo = await procesarImagenCanvas(canvasPalo, 18, 18);
 
         const numero = clasificarNumero(resNum.vectorBinario);
         const palo = resPalo.clase;
@@ -105,8 +105,8 @@ function App() {
       const botonesDetectados = [];
 
       for (let i = 0; i < dealerROIs.length; i++) {
-        const imgDealer = extraerRoi(dealerROIs[i]);
-        const resDealer = await procesarImagenBase64(imgDealer, 18, 18);
+        const canvasDealer = extraerRoiCanvas(dealerROIs[i]);
+        const resDealer = await procesarImagenCanvas(canvasDealer, 18, 18);
         botonesDetectados.push(resDealer.vectorBinario);
       }
 
@@ -115,6 +115,23 @@ function App() {
       const cartas_jugador = cartas.slice(0, 2).filter(c => c !== 'N/A');
       const cartas_mesa = cartas.slice(2).filter(c => c !== 'N/A');
 
+      const snapshotForComparison = JSON.stringify({
+        cartas_jugador,
+        cartas_mesa,
+        boton_posicion,
+        asiento_jugador: 5
+      });
+
+      if (snapshotForComparison === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = snapshotForComparison;
+
+      if (cartas_jugador.length < 2) {
+        setRecomendacion('⚠️ No se detectaron suficientes cartas para realizar una recomendación.');
+        return;
+      }
+
+      setRecomendacion('⏳ Analizando…');
+
       const resultado = {
         timestamp: new Date().toISOString(),
         cartas_jugador,
@@ -122,10 +139,6 @@ function App() {
         boton_posicion,
         asiento_jugador: 5
       };
-
-      const snapshotActual = JSON.stringify(resultado);
-      if (snapshotActual === lastSnapshotRef.current) return;
-      lastSnapshotRef.current = snapshotActual;
 
       const prompt = generarPromptParaGPT(resultado);
 
@@ -136,29 +149,21 @@ function App() {
       });
 
       const data = await response.json();
-      setRecomendacion(data.accion_sugerida || 'No hay respuesta de GPT.');
+      setRecomendacion(data.accion_sugerida || '⚠️ No hay respuesta de GPT.');
 
     } catch (err) {
       console.error('Error al capturar o procesar:', err);
-      setRecomendacion('❌ Error al capturar o procesar las imágenes.');
+      setRecomendacion('⚠️ Ocurrió un error al procesar la información.');
     }
   }
 
   function generarPromptParaGPT(resultado) {
     const { cartas_jugador, cartas_mesa, boton_posicion, asiento_jugador } = resultado;
-    let mensaje = `Estoy jugando al póker en una mesa de 6 jugadores.\n`;
-    mensaje += `Estoy en el asiento ${asiento_jugador} y el botón está en la posición ${boton_posicion}.\n`;
-    mensaje += `Mis cartas son: ${cartas_jugador.join(' y ')}.\n`;
 
-    if (cartas_mesa.length === 3) {
-      mensaje += `El flop es: ${cartas_mesa.join(', ')}.\n`;
-    } else if (cartas_mesa.length === 4) {
-      mensaje += `El turn es: ${cartas_mesa[3]} (con flop: ${cartas_mesa.slice(0, 3).join(', ')}).\n`;
-    } else if (cartas_mesa.length === 5) {
-      mensaje += `El river es: ${cartas_mesa[4]} (con flop y turn: ${cartas_mesa.slice(0, 4).join(', ')}).\n`;
-    }
+    let mensaje = `Tengo ${cartas_jugador.join(' y ')}, y en la mesa están ${cartas_mesa.length > 0 ? cartas_mesa.join(', ') : 'ninguna carta aún'}.\n`;
+    mensaje += `Estoy jugando al póker en una mesa de 6 jugadores. Estoy en el asiento ${asiento_jugador} y el botón está en la posición ${boton_posicion}.\n`;
+    mensaje += `\n\nDime qué debería hacer ahora. Comienza tu respuesta con una sola palabra clara (como: foldea, iguala, sube), y luego explícalo brevemente en una o dos frases.`;
 
-    mensaje += `¿Qué me recomiendas hacer en esta situación?`;
     return mensaje;
   }
 
