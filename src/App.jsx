@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import { procesarImagenCanvas } from './utils/procesarImagen';
+import { clasificarVector as clasificarNumero } from './utils/clasificadorNum';
 import './index.css';
 
 function CapturasDebug({ images }) {
@@ -20,54 +22,6 @@ function App() {
   const [debugImages, setDebugImages] = useState([]);
   const videoTrackRef = useRef(null);
   const intervalRef = useRef(null);
-  const lastHashRef = useRef([]);
-
-  async function enviarAlOCR(canvasList) {
-    const formData = new FormData();
-
-    await Promise.all(
-      canvasList.map((canvas, idx) =>
-        new Promise(resolve => {
-          canvas.toBlob(blob => {
-            if (blob) {
-              formData.append('imagenes', blob, `imagen${idx}.png`);
-            } else {
-              console.warn(`⚠️ Imagen ${idx} produjo un blob nulo`);
-            }
-            resolve();
-          }, 'image/png');
-        })
-      )
-    );
-
-    const response = await fetch('https://beethoven-bot-backend.vercel.app/api/ocr', {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`❌ Error ${response.status}: ${errorText}`);
-    }
-
-    const data = await response.json();
-    const textosOCR = data.results.map(r => r.results?.[0]?.text?.trim() || "");
-
-    const apuestas = textosOCR.slice(0, 6);
-    const pote = textosOCR[6] || 'Desconocido';
-    const jugadores = textosOCR.slice(7, 13);
-
-    const descripcionJugadores = jugadores.map((texto, i) => {
-  const apuesta = apuestas[i] || '–';
-  const stack = texto.match(/\d+(\.\d+)? BB/i)?.[0] || '–';
-  return `Jugador ${i + 1}: ${stack} (Apuesta: ${apuesta})`;
-});
-
-setRecomendacion(
-  `🎯 Pote: ${pote}\n\n` +
-  descripcionJugadores.map(j => `👤 ${j}`).join('\n')
-);
-  }
 
   async function capturarPantallaYProcesar() {
     if (!videoTrackRef.current) return;
@@ -87,6 +41,7 @@ setRecomendacion(
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, fullWidth, fullHeight);
 
+      // OCR ROIs
       const stackPotROIs = [
         { x: 203, y: 263, w: 75, h: 27 },
         { x: 438, y: 215, w: 75, h: 27 },
@@ -100,10 +55,10 @@ setRecomendacion(
         { x: 850, y: 238, w: 91, h: 22 },
         { x: 764, y: 538, w: 91, h: 22 },
         { x: 464, y: 592, w: 91, h: 22 },
-        { x: 170, y: 538, w: 91, h: 22 },
+        { x: 170, y: 538, w: 91, h: 22 }
       ];
 
-      const canvasList = stackPotROIs.map(({ x, y, w, h }) => {
+      const roiCanvasList = stackPotROIs.map(({ x, y, w, h }) => {
         const roiCanvas = document.createElement('canvas');
         roiCanvas.width = w;
         roiCanvas.height = h;
@@ -112,21 +67,135 @@ setRecomendacion(
         return roiCanvas;
       });
 
-      const currentHashes = canvasList.map(canvas => canvas.toDataURL());
-      /* const algunaCambio = lastHashRef.current.length === 0 || currentHashes.some((hash, idx) => hash !== lastHashRef.current[idx]);
+      // Cartas jugador (2) + mesa (5) => 14 ROIs
+      const cartasCoords = [
+        { x: 447, y: 498, w: 20, h: 25 },
+        { x: 447, y: 524, w: 18, h: 18 },
+        { x: 514, y: 498, w: 20, h: 25 },
+        { x: 514, y: 524, w: 18, h: 18 },
+        { x: 343, y: 278, w: 20, h: 25 },
+        { x: 343, y: 304, w: 18, h: 18 },
+        { x: 414, y: 278, w: 20, h: 25 },
+        { x: 414, y: 304, w: 18, h: 18 },
+        { x: 485, y: 278, w: 20, h: 25 },
+        { x: 485, y: 304, w: 18, h: 18 },
+        { x: 556, y: 278, w: 20, h: 25 },
+        { x: 556, y: 304, w: 18, h: 18 },
+        { x: 627, y: 278, w: 20, h: 25 },
+        { x: 627, y: 304, w: 18, h: 18 }
+      ];
 
-      if (!algunaCambio) {
-        setRecomendacion("⏸️ Imágenes iguales a la última captura. No se envía al backend.");
-        return;
-      } */
+      const dealerCoords = [
+        { x: 174, y: 267, w: 35, h: 28 },
+        { x: 406, y: 172, w: 35, h: 28 },
+        { x: 813, y: 267, w: 35, h: 28 },
+        { x: 673, y: 476, w: 35, h: 28 },
+        { x: 408, y: 489, w: 35, h: 28 },
+        { x: 318, y: 477, w: 35, h: 28 }
+      ];
 
-      lastHashRef.current = currentHashes;
-      setDebugImages(currentHashes);
+      const extraerRoiCanvas = ({ x, y, w, h }) => {
+        const roiCanvas = document.createElement('canvas');
+        roiCanvas.width = w;
+        roiCanvas.height = h;
+        const roiCtx = roiCanvas.getContext('2d');
+        roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+        return roiCanvas;
+      };
 
-      await enviarAlOCR(canvasList);
+      // Clasificar cartas jugador y mesa
+      const cartasJugador = [];
+      const cartasMesa = [];
+
+      for (let i = 0; i < cartasCoords.length; i += 2) {
+        const canvasNum = extraerRoiCanvas(cartasCoords[i]);
+        const canvasPalo = extraerRoiCanvas(cartasCoords[i + 1]);
+
+        const resNum = await procesarImagenCanvas(canvasNum, 20, 25);
+        const resPalo = await procesarImagenCanvas(canvasPalo, 18, 18);
+
+        const numero = clasificarNumero(resNum.vectorBinario);
+        const palo = resPalo.clase;
+
+        if (numero !== 'nada' && palo !== 'nada') {
+          const carta = `${numero} ${palo}`;
+          if (i < 4) cartasJugador.push(carta);
+          else cartasMesa.push(carta);
+        }
+      }
+
+      // Detectar botón (dealer)
+      const botones = await Promise.all(
+        dealerCoords.map(c => procesarImagenCanvas(extraerRoiCanvas(c), 18, 18))
+      );
+      const boton_pos = botones.findIndex(vec => vec.vectorBinario?.some(v => v === 1)) + 1 || null;
+
+      // OCR montos → enviar al backend
+      const formData = new FormData();
+      await Promise.all(
+        roiCanvasList.map((canvas, idx) =>
+          new Promise(resolve => {
+            canvas.toBlob(blob => {
+              if (blob) {
+                formData.append('imagenes', blob, `imagen${idx}.png`);
+              }
+              resolve();
+            }, 'image/png');
+          })
+        )
+      );
+
+      const response = await fetch('https://beethoven-bot-backend.vercel.app/api/ocr', {
+        method: 'POST',
+        body: formData
+      });
+
+      const data = await response.json();
+      const textosOCR = data.results.map(r => r.results?.[0]?.text?.trim() || '');
+
+      const apuestas = textosOCR.slice(0, 6);
+      const pote = textosOCR[6] || 'Desconocido';
+      const jugadores = textosOCR.slice(7, 13);
+
+      const descripcionJugadores = jugadores.map((texto, i) => {
+        const apuesta = apuestas[i] || '–';
+        const stack = texto.match(/\d+(\.\d+)? BB/i)?.[0] || '–';
+        return `Jugador ${i + 1}: ${stack} (Apuesta: ${apuesta})`;
+      });
+
+      const resumen = [
+        `🂡 Cartas jugador: ${cartasJugador.length ? cartasJugador.join(', ') : 'N/A'}`,
+        `🃏 Cartas mesa: ${cartasMesa.length ? cartasMesa.join(', ') : 'N/A'}`,
+        `🔘 Botón en posición: ${boton_pos || 'no detectado'}`,
+        `🎯 Pote: ${pote}`,
+        ``,
+        ...descripcionJugadores.map(j => `👤 ${j}`)
+      ];
+
+      setDebugImages(roiCanvasList.map(c => c.toDataURL()));
+      setRecomendacion(resumen.join('\n'));
+      setRecomendacion(resumen.join('\n'));
+
+await fetch('https://beethoven-bot-backend.vercel.app/api/historial', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    cartas_jugador: cartasJugador,
+    cartas_mesa: cartasMesa,
+    posicion: boton_pos?.toString(),
+    pote,
+    jugadores: descripcionJugadores.map((desc, i) => ({
+      jugador: i + 1,
+      stack: desc.match(/\d+(\.\d+)? BB/)?.[0] || '–',
+      apuesta: apuestas[i] || '–'
+    }))
+  })
+});
+
     } catch (err) {
       console.error('Error al capturar o procesar:', err);
       setRecomendacion('⚠️ Ocurrió un error al procesar la información.');
+      
     }
   }
 
@@ -136,7 +205,7 @@ setRecomendacion(
       const track = stream.getVideoTracks()[0];
       videoTrackRef.current = track;
       setStreamIniciado(true);
-      intervalRef.current = setInterval(capturarPantallaYProcesar, 1000);
+      intervalRef.current = setInterval(capturarPantallaYProcesar, 3000);
     } catch (err) {
       console.error('Error al iniciar captura:', err);
       setRecomendacion('❌ No se pudo iniciar la captura.');
@@ -165,7 +234,7 @@ setRecomendacion(
       )}
 
       <div className="bg-gray-800 p-6 rounded-lg max-w-2xl w-full mt-4">
-        <h2 className="text-xl font-semibold mb-2">🧠 OCR Detectado</h2>
+        <h2 className="text-xl font-semibold mb-2">📊 Estado Actual</h2>
         <pre className="text-sm whitespace-pre-wrap break-words">{recomendacion}</pre>
       </div>
 
