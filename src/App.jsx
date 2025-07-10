@@ -136,7 +136,7 @@ setRecomendacion(
       const track = stream.getVideoTracks()[0];
       videoTrackRef.current = track;
       setStreamIniciado(true);
-      intervalRef.current = setInterval(capturarPantallaYProcesar, 500);
+      intervalRef.current = setInterval(capturarPantallaYProcesar, 1000);
     } catch (err) {
       console.error('Error al iniciar captura:', err);
       setRecomendacion('❌ No se pudo iniciar la captura.');
