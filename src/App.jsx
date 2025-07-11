@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { procesarImagenCanvas } from './utils/procesarImagen';
 import { clasificarVector as clasificarNumero } from './utils/clasificadorNum';
 import './index.css';
@@ -20,8 +20,22 @@ function App() {
   const [recomendacion, setRecomendacion] = useState('');
   const [streamIniciado, setStreamIniciado] = useState(false);
   const [debugImages, setDebugImages] = useState([]);
+  const [manoActual, setManoActual] = useState([]);
+  const [cartasPrevias, setCartasPrevias] = useState([]);
   const videoTrackRef = useRef(null);
   const intervalRef = useRef(null);
+  const [snapshotAnterior, setSnapshotAnterior] = useState(null);
+
+  const esNuevaMano = (cartasJugador) => {
+    return (
+      cartasJugador.length > 0 &&
+      (cartasPrevias.length === 0 || cartasJugador.join(',') !== cartasPrevias.join(','))
+    );
+  };
+
+  const manoTerminada = (cartasJugador) => {
+    return cartasPrevias.length > 0 && cartasJugador.length === 0;
+  };
 
   async function capturarPantallaYProcesar() {
     if (!videoTrackRef.current) return;
@@ -41,118 +55,112 @@ function App() {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0, fullWidth, fullHeight);
 
-      // OCR ROIs
       const stackPotROIs = [
-        { x: 203, y: 263, w: 75, h: 27 },
-        { x: 438, y: 215, w: 75, h: 27 },
-        { x: 744, y: 263, w: 75, h: 27 },
-        { x: 674, y: 446, w: 75, h: 27 },
-        { x: 513, y: 453, w: 75, h: 27 },
-        { x: 276, y: 447, w: 75, h: 27 },
-        { x: 476, y: 376, w: 75, h: 27 },
-        { x: 86, y: 238, w: 91, h: 22 },
-        { x: 467, y: 153, w: 91, h: 22 },
-        { x: 850, y: 238, w: 91, h: 22 },
-        { x: 764, y: 538, w: 91, h: 22 },
-        { x: 464, y: 592, w: 91, h: 22 },
-        { x: 170, y: 538, w: 91, h: 22 }
-      ];
+  { x: 203, y: 263, w: 75, h: 27 },
+  { x: 438, y: 215, w: 75, h: 27 },
+  { x: 744, y: 263, w: 75, h: 27 },
+  { x: 674, y: 446, w: 75, h: 27 },
+  { x: 513, y: 453, w: 75, h: 27 },
+  { x: 276, y: 447, w: 75, h: 27 },
+  { x: 476, y: 376, w: 75, h: 27 },
+  { x: 86, y: 238, w: 91, h: 22 },
+  { x: 467, y: 153, w: 91, h: 22 },
+  { x: 850, y: 238, w: 91, h: 22 },
+  { x: 764, y: 538, w: 91, h: 22 },
+  { x: 464, y: 592, w: 91, h: 22 },
+  { x: 170, y: 538, w: 91, h: 22 }
+];
 
-      const roiCanvasList = stackPotROIs.map(({ x, y, w, h }) => {
-        const roiCanvas = document.createElement('canvas');
-        roiCanvas.width = w;
-        roiCanvas.height = h;
-        const roiCtx = roiCanvas.getContext('2d');
-        roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-        return roiCanvas;
-      });
+const roiCanvasList = stackPotROIs.map(({ x, y, w, h }) => {
+  const roiCanvas = document.createElement('canvas');
+  roiCanvas.width = w;
+  roiCanvas.height = h;
+  const roiCtx = roiCanvas.getContext('2d');
+  roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+  return roiCanvas;
+});
 
-      // Cartas jugador (2) + mesa (5) => 14 ROIs
-      const cartasCoords = [
-        { x: 447, y: 498, w: 20, h: 25 },
-        { x: 447, y: 524, w: 18, h: 18 },
-        { x: 514, y: 498, w: 20, h: 25 },
-        { x: 514, y: 524, w: 18, h: 18 },
-        { x: 343, y: 278, w: 20, h: 25 },
-        { x: 343, y: 304, w: 18, h: 18 },
-        { x: 414, y: 278, w: 20, h: 25 },
-        { x: 414, y: 304, w: 18, h: 18 },
-        { x: 485, y: 278, w: 20, h: 25 },
-        { x: 485, y: 304, w: 18, h: 18 },
-        { x: 556, y: 278, w: 20, h: 25 },
-        { x: 556, y: 304, w: 18, h: 18 },
-        { x: 627, y: 278, w: 20, h: 25 },
-        { x: 627, y: 304, w: 18, h: 18 }
-      ];
+const cartasCoords = [
+  { x: 447, y: 498, w: 20, h: 25 },
+  { x: 447, y: 524, w: 18, h: 18 },
+  { x: 514, y: 498, w: 20, h: 25 },
+  { x: 514, y: 524, w: 18, h: 18 },
+  { x: 343, y: 278, w: 20, h: 25 },
+  { x: 343, y: 304, w: 18, h: 18 },
+  { x: 414, y: 278, w: 20, h: 25 },
+  { x: 414, y: 304, w: 18, h: 18 },
+  { x: 485, y: 278, w: 20, h: 25 },
+  { x: 485, y: 304, w: 18, h: 18 },
+  { x: 556, y: 278, w: 20, h: 25 },
+  { x: 556, y: 304, w: 18, h: 18 },
+  { x: 627, y: 278, w: 20, h: 25 },
+  { x: 627, y: 304, w: 18, h: 18 }
+];
 
-      const dealerCoords = [
-        { x: 174, y: 267, w: 35, h: 28 },
-        { x: 406, y: 172, w: 35, h: 28 },
-        { x: 813, y: 267, w: 35, h: 28 },
-        { x: 673, y: 476, w: 35, h: 28 },
-        { x: 408, y: 489, w: 35, h: 28 },
-        { x: 318, y: 477, w: 35, h: 28 }
-      ];
+const dealerCoords = [
+  { x: 174, y: 267, w: 35, h: 28 },
+  { x: 406, y: 172, w: 35, h: 28 },
+  { x: 813, y: 267, w: 35, h: 28 },
+  { x: 673, y: 476, w: 35, h: 28 },
+  { x: 408, y: 489, w: 35, h: 28 },
+  { x: 318, y: 477, w: 35, h: 28 }
+];
 
-      const extraerRoiCanvas = ({ x, y, w, h }) => {
-        const roiCanvas = document.createElement('canvas');
-        roiCanvas.width = w;
-        roiCanvas.height = h;
-        const roiCtx = roiCanvas.getContext('2d');
-        roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
-        return roiCanvas;
-      };
+const extraerRoiCanvas = ({ x, y, w, h }) => {
+  const roiCanvas = document.createElement('canvas');
+  roiCanvas.width = w;
+  roiCanvas.height = h;
+  const roiCtx = roiCanvas.getContext('2d');
+  roiCtx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+  return roiCanvas;
+};
 
-      // Clasificar cartas jugador y mesa
-      const cartasJugador = [];
-      const cartasMesa = [];
+const cartasJugador = [];
+const cartasMesa = [];
 
-      for (let i = 0; i < cartasCoords.length; i += 2) {
-        const canvasNum = extraerRoiCanvas(cartasCoords[i]);
-        const canvasPalo = extraerRoiCanvas(cartasCoords[i + 1]);
+for (let i = 0; i < cartasCoords.length; i += 2) {
+  const canvasNum = extraerRoiCanvas(cartasCoords[i]);
+  const canvasPalo = extraerRoiCanvas(cartasCoords[i + 1]);
+  const resNum = await procesarImagenCanvas(canvasNum, 20, 25);
+  const resPalo = await procesarImagenCanvas(canvasPalo, 18, 18);
+  const numero = clasificarNumero(resNum.vectorBinario);
+  const palo = resPalo.clase;
 
-        const resNum = await procesarImagenCanvas(canvasNum, 20, 25);
-        const resPalo = await procesarImagenCanvas(canvasPalo, 18, 18);
+  if (numero !== 'nada' && palo !== 'nada') {
+    const carta = `${numero} ${palo}`;
+    if (i < 4) cartasJugador.push(carta);
+    else cartasMesa.push(carta);
+  }
+}
 
-        const numero = clasificarNumero(resNum.vectorBinario);
-        const palo = resPalo.clase;
+// Detectar botón
+const botones = await Promise.all(
+  dealerCoords.map(c => procesarImagenCanvas(extraerRoiCanvas(c), 18, 18))
+);
+const boton_pos = botones.findIndex(vec => vec.vectorBinario?.some(v => v === 1)) + 1 || null;
 
-        if (numero !== 'nada' && palo !== 'nada') {
-          const carta = `${numero} ${palo}`;
-          if (i < 4) cartasJugador.push(carta);
-          else cartasMesa.push(carta);
+// OCR
+const formData = new FormData();
+await Promise.all(
+  roiCanvasList.map((canvas, idx) =>
+    new Promise(resolve => {
+      canvas.toBlob(blob => {
+        if (blob) {
+          formData.append('imagenes', blob, `imagen${idx}.png`);
         }
-      }
+        resolve();
+      }, 'image/png');
+    })
+  )
+);
 
-      // Detectar botón (dealer)
-      const botones = await Promise.all(
-        dealerCoords.map(c => procesarImagenCanvas(extraerRoiCanvas(c), 18, 18))
-      );
-      const boton_pos = botones.findIndex(vec => vec.vectorBinario?.some(v => v === 1)) + 1 || null;
-
-      // OCR montos → enviar al backend
-      const formData = new FormData();
-      await Promise.all(
-        roiCanvasList.map((canvas, idx) =>
-          new Promise(resolve => {
-            canvas.toBlob(blob => {
-              if (blob) {
-                formData.append('imagenes', blob, `imagen${idx}.png`);
-              }
-              resolve();
-            }, 'image/png');
-          })
-        )
-      );
-
-      const response = await fetch('https://beethoven-bot-backend.vercel.app/api/ocr', {
-        method: 'POST',
-        body: formData
-      });
+const response = await fetch('https://beethoven-bot-backend.vercel.app/api/ocr', {
+  method: 'POST',
+  body: formData
+});
 
       const data = await response.json();
       const textosOCR = data.results.map(r => r.results?.[0]?.text?.trim() || '');
-
       const apuestas = textosOCR.slice(0, 6);
       const pote = textosOCR[6] || 'Desconocido';
       const jugadores = textosOCR.slice(7, 13);
@@ -168,34 +176,74 @@ function App() {
         `🃏 Cartas mesa: ${cartasMesa.length ? cartasMesa.join(', ') : 'N/A'}`,
         `🔘 Botón en posición: ${boton_pos || 'no detectado'}`,
         `🎯 Pote: ${pote}`,
-        ``,
+        '',
         ...descripcionJugadores.map(j => `👤 ${j}`)
       ];
 
       setDebugImages(roiCanvasList.map(c => c.toDataURL()));
       setRecomendacion(resumen.join('\n'));
-      setRecomendacion(resumen.join('\n'));
 
-await fetch('https://beethoven-bot-backend.vercel.app/api/historial', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    cartas_jugador: cartasJugador,
-    cartas_mesa: cartasMesa,
-    posicion: boton_pos?.toString(),
-    pote,
-    jugadores: descripcionJugadores.map((desc, i) => ({
-      jugador: i + 1,
-      stack: desc.match(/\d+(\.\d+)? BB/)?.[0] || '–',
-      apuesta: apuestas[i] || '–'
-    }))
-  })
-});
+      // Lógica de cambio de mano
+      if (manoTerminada(cartasJugador)) {
+  setManoActual([]);
+  setCartasPrevias([]);
+  setSnapshotAnterior(null);
+  return;
+}
+
+if (esNuevaMano(cartasJugador)) {
+  setManoActual([]); // limpiar historial de la mano anterior
+}
+
+// Crear snapshot actual para comparar
+const snapshotActual = {
+  cartas_jugador: cartasJugador,
+  cartas_mesa: cartasMesa,
+  pote,
+  posicion: boton_pos?.toString(),
+  jugadores: descripcionJugadores.map((desc, i) => ({
+    jugador: i + 1,
+    stack: desc.match(/\d+(\.\d+)? BB/)?.[0] || '–',
+    apuesta: apuestas[i] || '–'
+  }))
+};
+
+// Comparar con snapshot anterior
+const haCambiado =
+  !snapshotAnterior ||
+  snapshotAnterior.cartas_mesa !== snapshotActual.cartas_mesa ||
+  snapshotAnterior.pote !== snapshotActual.pote ||
+  snapshotAnterior.posicion !== snapshotActual.posicion ||
+  JSON.stringify(snapshotAnterior.jugadores) !== JSON.stringify(snapshotActual.jugadores);
+
+if (haCambiado) {
+  setManoActual(prev => [snapshotActual, ...prev]);
+  setSnapshotAnterior(snapshotActual);
+
+  // Guardar en backend solo si hubo cambios
+  await fetch('https://beethoven-bot-backend.vercel.app/api/historial', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      cartas_jugador: cartasJugador,
+      cartas_mesa: cartasMesa,
+      posicion: boton_pos?.toString(),
+      pote,
+      jugadores: descripcionJugadores.map((desc, i) => ({
+        jugador: i + 1,
+        stack: desc.match(/\d+(\.\d+)? BB/)?.[0] || '–',
+        apuesta: apuestas[i] || '–'
+      }))
+    })
+  });
+}
+
+setCartasPrevias(cartasJugador);
+
 
     } catch (err) {
       console.error('Error al capturar o procesar:', err);
       setRecomendacion('⚠️ Ocurrió un error al procesar la información.');
-      
     }
   }
 
@@ -233,12 +281,50 @@ await fetch('https://beethoven-bot-backend.vercel.app/api/historial', {
         </button>
       )}
 
-      <div className="bg-gray-800 p-6 rounded-lg max-w-2xl w-full mt-4">
+      {/* <div className="bg-gray-800 p-6 rounded-lg max-w-2xl w-full mt-4">
         <h2 className="text-xl font-semibold mb-2">📊 Estado Actual</h2>
         <pre className="text-sm whitespace-pre-wrap break-words">{recomendacion}</pre>
       </div>
 
-      <CapturasDebug images={debugImages} />
+      <CapturasDebug images={debugImages} /> */}
+
+      <div className="bg-gray-800 p-6 rounded-lg max-w-6xl w-full mt-6 overflow-x-auto">
+        <h2 className="text-xl font-semibold mb-4">🎯 Mano en juego</h2>
+        <table className="min-w-full text-sm text-white table-auto border-collapse">
+  <thead className="bg-gray-700 text-xs uppercase font-semibold text-gray-300">
+    <tr>
+      <th className="px-2 py-2 border border-gray-600 text-center">#</th>
+      <th className="px-2 py-2 border border-gray-600 text-center">Cartas Jugador</th>
+      <th className="px-2 py-2 border border-gray-600 text-center">Cartas Mesa</th>
+      <th className="px-2 py-2 border border-gray-600 text-center">Botón</th>
+      <th className="px-2 py-2 border border-gray-600 text-center">Pote</th>
+      {[1, 2, 3, 4, 5, 6].map(n => (
+        <th key={n} className="px-2 py-2 border border-gray-600 text-center">J{n}</th>
+      ))}
+    </tr>
+  </thead>
+  <tbody>
+    {[...manoActual].reverse().map((h, idx) => (
+      <tr key={idx} className="bg-gray-900 even:bg-gray-800">
+        <td className="px-2 py-2 border border-gray-700 text-center">{idx + 1}</td>
+        <td className="px-2 py-2 border border-gray-700">{h.cartas_jugador.join(', ')}</td>
+        <td className="px-2 py-2 border border-gray-700">{h.cartas_mesa.join(', ')}</td>
+        <td className="px-2 py-2 border border-gray-700 text-center">{h.posicion || '–'}</td>
+        <td className="px-2 py-2 border border-gray-700 text-center">{h.pote}</td>
+        {[0, 1, 2, 3, 4, 5].map(i => {
+  const j = h.jugadores[i];
+  return (
+    <td key={i} className="px-2 py-2 border border-gray-700 text-center">
+      {j ? `${j.stack} / ${j.apuesta}` : '–'}
+    </td>
+  );
+})}
+
+      </tr>
+    ))}
+  </tbody>
+</table>
+      </div>
     </div>
   );
 }
